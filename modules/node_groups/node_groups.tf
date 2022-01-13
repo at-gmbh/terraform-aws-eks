@@ -14,13 +14,13 @@ resource "aws_eks_node_group" "workers" {
   }
 
   ami_type        = lookup(each.value, "ami_type", null)
-  disk_size       = lookup(each.value, "disk_size", null)
-  instance_types  = lookup(each.value, "instance_types", null)
+  disk_size       = each.value["launch_template_id"] != null || each.value["create_launch_template"] ? null : lookup(each.value, "disk_size", null)
+  instance_types  = !each.value["set_instance_types_on_lt"] ? each.value["instance_types"] : null
   release_version = lookup(each.value, "ami_release_version", null)
   capacity_type   = lookup(each.value, "capacity_type", null)
 
   dynamic "remote_access" {
-    for_each = each.value["key_name"] != "" ? [{
+    for_each = each.value["key_name"] != "" && each.value["launch_template_id"] == null && !each.value["create_launch_template"] ? [{
       ec2_ssh_key               = each.value["key_name"]
       source_security_group_ids = lookup(each.value, "source_security_group_ids", [])
     }] : []
@@ -43,6 +43,29 @@ resource "aws_eks_node_group" "workers" {
     }
   }
 
+  dynamic "launch_template" {
+    for_each = each.value["launch_template_id"] == null && each.value["create_launch_template"] ? [{
+      id = aws_launch_template.workers[each.key].id
+      version = each.value["launch_template_version"] == "$Latest" ? aws_launch_template.workers[each.key].latest_version : (
+        each.value["launch_template_version"] == "$Default" ? aws_launch_template.workers[each.key].default_version : each.value["launch_template_version"]
+      )
+    }] : []
+
+    content {
+      id      = launch_template.value["id"]
+      version = launch_template.value["version"]
+    }
+  }
+
+  dynamic "taint" {
+      for_each = each.value["taints"]
+
+      content {
+        key    = taint.value["key"]
+        value  = taint.value["value"]
+        effect = taint.value["effect"]
+      }
+    }
   version = lookup(each.value, "version", null)
 
   labels = merge(
@@ -62,4 +85,16 @@ resource "aws_eks_node_group" "workers" {
   }
 
   depends_on = [var.ng_depends_on]
+}
+
+resource "aws_autoscaling_group_tag" "tag" {
+  for_each = { for map in local.asg_tag_list : "${map.group_name}_${map.key}" => map if aws_eks_node_group.workers != {} }
+
+  autoscaling_group_name = aws_eks_node_group.workers[replace(each.key, "_${each.value.key}", "")].resources[0].autoscaling_groups[0].name
+
+  tag {
+    key                 = each.value.key
+    value               = each.value.value
+    propagate_at_launch = each.value.propagate
+  }
 }

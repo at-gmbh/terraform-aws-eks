@@ -11,8 +11,22 @@ locals {
       max_capacity            = var.workers_group_defaults["asg_max_size"]
       min_capacity            = var.workers_group_defaults["asg_min_size"]
       subnets                 = var.workers_group_defaults["subnets"]
+      taints                  = []
     },
     var.node_groups_defaults,
     v,
   ) if var.create_eks }
+
+  asg_tag_list = flatten([
+    for name, info in var.node_groups : [
+      [
+        for tag in lookup(try(var.node_groups[name], {}), "asg_tags", {}) : {
+          group_name = name
+          key        = tag.key
+          propagate  = try(tag.propagate_at_launch, false)
+          value      = tag.value
+        }
+      ]
+    ]
+  ])
 }
